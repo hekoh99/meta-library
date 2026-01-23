@@ -11,5 +11,10 @@
   "devDependencies": {
     "typescript": "~5.9.3",
     "vite": "^7.2.4"
+  },
+  "dependencies": {
+    "nipplejs": "^0.10.2",
+    "phaser": "^3.90.0",
+    "shared": "workspace:*"
   }
 }
