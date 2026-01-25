@@ -11,6 +11,7 @@ type Vec2 = { x: number; y: number };
 
 class MainScene extends Phaser.Scene {
   private player!: Phaser.GameObjects.Rectangle;
+  private playerBody!: Phaser.Physics.Arcade.Body;
   private joystickDir: Vec2 = { x: 0, y: 0 };
   private speed = 220; // px/sec
   private socket?: WebSocket;
@@ -20,17 +21,40 @@ class MainScene extends Phaser.Scene {
   private lastSentPos: Vec2 = { x: 0, y: 0 };
   private nickname = `guest-${Math.floor(Math.random() * 10000)}`;
   private avatar = "box";
+  private floorTileSize = 32;
+  private mapWidth = 2000;
+  private mapHeight = 1200;
 
   create() {
     // 배경
     this.cameras.main.setBackgroundColor("#1b1b1b");
 
+    // 바닥 타일 생성 및 배치
+    this.createFloor();
+
+    // 월드 바운더리 설정 (고정된 맵 크기)
+    this.physics.world.setBounds(0, 0, this.mapWidth, this.mapHeight);
+    this.cameras.main.setBounds(0, 0, this.mapWidth, this.mapHeight);
+
     // 화면 중앙에 플레이어(일단 사각형)
-    const cx = this.scale.width / 2;
-    const cy = this.scale.height / 2;
+    const cx = this.mapWidth / 2;
+    const cy = this.mapHeight / 2;
+
+    // 테스트용 오브젝트: 100x30 빨간 박스 (충돌 대상)
+    const obstacle = this.add
+      .rectangle(200, 160, 100, 30, 0xff3b3b)
+      .setOrigin(0.5, 0.5);
+    this.physics.add.existing(obstacle, true);
 
     this.player = this.add.rectangle(cx, cy, 20, 20, 0xffffff);
     this.player.setOrigin(0.5, 0.5);
+    this.physics.add.existing(this.player);
+    this.playerBody = this.player.body as Phaser.Physics.Arcade.Body;
+    this.playerBody.setCollideWorldBounds(true);
+    this.playerBody.setAllowGravity(false);
+    this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
+
+    this.physics.add.collider(this.player, obstacle);
 
     // 안내 텍스트(디버그)
     this.add
@@ -45,9 +69,7 @@ class MainScene extends Phaser.Scene {
     this.setupSocket();
   }
 
-  update(_: number, deltaMs: number) {
-    const dt = deltaMs / 1000;
-
+  update() {
     // 데스크탑용: 방향키도 같이 지원
     const cursors = this.input.keyboard?.createCursorKeys();
     let dx = this.joystickDir.x;
@@ -68,15 +90,28 @@ class MainScene extends Phaser.Scene {
     }
 
     // 이동
-    this.player.x += dx * this.speed * dt;
-    this.player.y += dy * this.speed * dt;
-
-    // 화면 밖으로 나가지 않게 클램프
-    const pad = 10;
-    this.player.x = Phaser.Math.Clamp(this.player.x, pad, this.scale.width - pad);
-    this.player.y = Phaser.Math.Clamp(this.player.y, pad, this.scale.height - pad);
+    this.playerBody.setVelocity(dx * this.speed, dy * this.speed);
 
     this.sendMoveIfNeeded(this.time.now);
+  }
+
+  private createFloor() {
+    const tileKey = "floor-tile";
+    if (!this.textures.exists(tileKey)) {
+      const tile = this.floorTileSize;
+      const gfx = this.add.graphics();
+      gfx.fillStyle(0x2a2a2a, 1);
+      gfx.fillRect(0, 0, tile, tile);
+      gfx.lineStyle(1, 0x333333, 1);
+      gfx.strokeRect(0, 0, tile, tile);
+      gfx.generateTexture(tileKey, tile, tile);
+      gfx.destroy();
+    }
+
+    this.add
+      .tileSprite(0, 0, this.mapWidth, this.mapHeight, tileKey)
+      .setOrigin(0, 0)
+      .setDepth(-10);
   }
 
   private setupJoystick() {
@@ -251,11 +286,6 @@ class MainScene extends Phaser.Scene {
     this.scale.on("resize", (gameSize: Phaser.Structs.Size) => {
       const { width, height } = gameSize;
       this.cameras.resize(width, height);
-
-      // 플레이어가 화면 밖에 있으면 안으로
-      const pad = 10;
-      this.player.x = Phaser.Math.Clamp(this.player.x, pad, width - pad);
-      this.player.y = Phaser.Math.Clamp(this.player.y, pad, height - pad);
     });
   }
 }
