@@ -6,8 +6,13 @@ settings:
 
 importers:
 
+  .: {}
+
   back:
     dependencies:
+      dotenv:
+        specifier: ^16.6.1
+        version: 16.6.1
       nanoid:
         specifier: ^5.1.6
         version: 5.1.6
@@ -426,6 +431,10 @@ packages:
   diff@4.0.4:
     resolution: {integrity: sha512-X07nttJQkwkfKfvTPG/KSnE2OMdcUCao6+eXF3wmnIQRn2aPAHH3VxDbDOdegkd6JbPsXqShpvEOHfAT+nCNwQ==}
     engines: {node: '>=0.3.1'}
+
+  dotenv@16.6.1:
+    resolution: {integrity: sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow==}
+    engines: {node: '>=12'}
 
   dynamic-dedupe@0.3.0:
     resolution: {integrity: sha512-ssuANeD+z97meYOqd50e04Ze5qp4bPqo8cCkI4TRjZkzAUgIDTrXV1R8QCdINpiI+hw14+rYazvTRdQrz0/rFQ==}
@@ -951,6 +960,8 @@ snapshots:
   create-require@1.1.1: {}
 
   diff@4.0.4: {}
+
+  dotenv@16.6.1: {}
 
   dynamic-dedupe@0.3.0:
     dependencies:

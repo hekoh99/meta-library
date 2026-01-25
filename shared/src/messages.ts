@@ -16,6 +16,7 @@ export interface UserState {
   id: string;
   nickname: string;
   avatar: string;
+  color: number;
   x: number;
   y: number;
 }

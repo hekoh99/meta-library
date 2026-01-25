@@ -5,13 +5,14 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "ts-node-dev src/index.ts"
+    "dev": "DOTENV_CONFIG_PATH=.env.local ts-node-dev -r dotenv/config src/index.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "packageManager": "pnpm@10.28.1",
   "dependencies": {
+    "dotenv": "^16.6.1",
     "nanoid": "^5.1.6",
     "shared": "workspace:*",
     "ws": "^8.19.0"

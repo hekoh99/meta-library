@@ -1,6 +1,11 @@
 import "./style.css";
 import Phaser from "phaser";
 import nipplejs from "nipplejs";
+import type {
+  ClientToServer,
+  ServerToClient,
+  UserState,
+} from "shared/src/messages";
 
 type Vec2 = { x: number; y: number };
 
@@ -8,6 +13,13 @@ class MainScene extends Phaser.Scene {
   private player!: Phaser.GameObjects.Rectangle;
   private joystickDir: Vec2 = { x: 0, y: 0 };
   private speed = 220; // px/sec
+  private socket?: WebSocket;
+  private selfId: string | null = null;
+  private peers = new Map<string, Phaser.GameObjects.Rectangle>();
+  private lastSentAt = 0;
+  private lastSentPos: Vec2 = { x: 0, y: 0 };
+  private nickname = `guest-${Math.floor(Math.random() * 10000)}`;
+  private avatar = "box";
 
   create() {
     // 배경
@@ -30,6 +42,7 @@ class MainScene extends Phaser.Scene {
 
     this.setupJoystick();
     this.setupResizeHandling();
+    this.setupSocket();
   }
 
   update(_: number, deltaMs: number) {
@@ -62,6 +75,8 @@ class MainScene extends Phaser.Scene {
     const pad = 10;
     this.player.x = Phaser.Math.Clamp(this.player.x, pad, this.scale.width - pad);
     this.player.y = Phaser.Math.Clamp(this.player.y, pad, this.scale.height - pad);
+
+    this.sendMoveIfNeeded(this.time.now);
   }
 
   private setupJoystick() {
@@ -92,6 +107,143 @@ class MainScene extends Phaser.Scene {
     manager.on("end", () => {
       this.joystickDir = { x: 0, y: 0 };
     });
+  }
+
+  private setupSocket() {
+    const url =
+      (import.meta.env.VITE_WS_URL as string | undefined) ??
+      "ws://localhost:8080";
+    if (!import.meta.env.VITE_WS_URL) {
+      console.warn(`[ws] VITE_WS_URL not set, using ${url}`);
+    }
+
+    const socket = new WebSocket(url);
+    this.socket = socket;
+
+    socket.addEventListener("open", () => {
+      console.log("[ws] connected");
+      const join: ClientToServer = {
+        type: "join",
+        room: "lobby",
+        nickname: this.nickname,
+        avatar: this.avatar,
+      };
+      socket.send(JSON.stringify(join));
+      this.sendMove();
+    });
+
+    socket.addEventListener("message", async (event) => {
+      const msg = await this.parseServerMessage(event.data);
+      if (!msg) {
+        console.warn("[ws] invalid message");
+        return;
+      }
+
+      if (msg.type === "welcome") {
+        this.selfId = msg.id;
+        msg.users.forEach((user) => {
+          if (user.id === this.selfId) {
+            this.player.setFillStyle(user.color);
+            return;
+          }
+          this.upsertPeer(user);
+        });
+        return;
+      }
+
+      if (msg.type === "user_joined") {
+        if (msg.user.id === this.selfId) return;
+        this.upsertPeer(msg.user);
+        return;
+      }
+
+      if (msg.type === "user_left") {
+        this.removePeer(msg.id);
+        return;
+      }
+
+      if (msg.type === "state") {
+        if (msg.id === this.selfId) return;
+        this.updatePeerPosition(msg.id, msg.x, msg.y);
+      }
+    });
+
+    socket.addEventListener("close", () => {
+      console.warn("[ws] disconnected");
+    });
+
+    socket.addEventListener("error", () => {
+      console.warn("[ws] connection error");
+    });
+  }
+
+  private async parseServerMessage(
+    data: unknown,
+  ): Promise<ServerToClient | null> {
+    const text = await this.readMessageText(data);
+    if (text === null) return null;
+    try {
+      return JSON.parse(text) as ServerToClient;
+    } catch {
+      return null;
+    }
+  }
+
+  private async readMessageText(data: unknown): Promise<string | null> {
+    if (typeof data === "string") return data;
+    if (data instanceof Blob) return await data.text();
+    if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
+    return null;
+  }
+
+  private sendMove() {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    const payload: ClientToServer = {
+      type: "move",
+      x: this.player.x,
+      y: this.player.y,
+    };
+    this.socket.send(JSON.stringify(payload));
+    this.lastSentAt = this.time.now;
+    this.lastSentPos = { x: this.player.x, y: this.player.y };
+  }
+
+  private sendMoveIfNeeded(nowMs: number) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    const dx = this.player.x - this.lastSentPos.x;
+    const dy = this.player.y - this.lastSentPos.y;
+    if (Math.hypot(dx, dy) < 0.5) return;
+    if (nowMs - this.lastSentAt < 50) return;
+    this.sendMove();
+  }
+
+  private upsertPeer(user: UserState) {
+    let rect = this.peers.get(user.id);
+    if (!rect) {
+      rect = this.add.rectangle(user.x, user.y, 20, 20, user.color);
+      rect.setOrigin(0.5, 0.5);
+      this.peers.set(user.id, rect);
+      return;
+    }
+
+    rect.setPosition(user.x, user.y);
+  }
+
+  private updatePeerPosition(id: string, x: number, y: number) {
+    const rect = this.peers.get(id);
+    if (!rect) {
+      this.upsertPeer({ id, nickname: "", avatar: "", color: 0x66ccff, x, y });
+      return;
+    }
+
+    rect.setPosition(x, y);
+  }
+
+  private removePeer(id: string) {
+    const rect = this.peers.get(id);
+    if (!rect) return;
+    rect.destroy();
+    this.peers.delete(id);
   }
 
   private setupResizeHandling() {
