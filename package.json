@@ -1,0 +1,11 @@
+{
+  "name": "meta-library",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@10.28.1",
+  "scripts": {
+    "dev:front": "pnpm --filter front dev",
+    "dev:back": "pnpm --filter back dev",
+    "dev": "pnpm -r --parallel --filter front --filter back dev"
+  }
+}
