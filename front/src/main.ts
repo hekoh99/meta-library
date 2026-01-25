@@ -101,7 +101,7 @@ class MainScene extends Phaser.Scene {
       // data.vector: -1..1
       const v = data?.vector;
       if (!v) return;
-      this.joystickDir = { x: v.x, y: v.y };
+      this.joystickDir = { x: v.x, y: -v.y };
     });
 
     manager.on("end", () => {
