@@ -9,6 +9,9 @@ import type {
 
 type Vec2 = { x: number; y: number };
 
+let updateBootStatus = (_text: string) => {};
+let updateNetStatus = (_text: string) => {};
+
 class MainScene extends Phaser.Scene {
   private player!: Phaser.GameObjects.Rectangle;
   private playerBody!: Phaser.Physics.Arcade.Body;
@@ -21,30 +24,103 @@ class MainScene extends Phaser.Scene {
   private lastSentPos: Vec2 = { x: 0, y: 0 };
   private nickname = `guest-${Math.floor(Math.random() * 10000)}`;
   private avatar = "box";
-  private floorTileSize = 32;
-  private mapWidth = 2000;
-  private mapHeight = 1200;
+  private mapWidth = 0;
+  private mapHeight = 0;
+  private readonly mapKey = "library-map";
+  private readonly fallbackSize = { width: 2000, height: 1200 };
+  private readonly maxTileCount = 250_000;
+  private mapUrl = "";
+
+  preload() {
+    updateBootStatus("preload: starting");
+    this.load.on(Phaser.Loader.Events.FILE_LOAD_ERROR, (file: any) => {
+      const key = file?.key ?? "unknown";
+      const url = file?.url ?? "unknown";
+      updateBootStatus(`load error: ${key} (${url})`);
+    });
+    this.load.on(Phaser.Loader.Events.COMPLETE, () => {
+      updateBootStatus("preload: complete");
+    });
+
+    this.mapUrl = new URL(
+      "../assets/map/library-main.resolved.json",
+      import.meta.url,
+    ).toString();
+    this.load.tilemapTiledJSON(this.mapKey, this.mapUrl);
+    this.load.image(
+      "tiles-door-and-room",
+      new URL(
+        "../assets/map/tilesets/fancy_mansion_room_door_tiles.png",
+        import.meta.url,
+      ).toString(),
+    );
+    this.load.image(
+      "tiles-fancy-furniture",
+      new URL(
+        "../assets/map/tilesets/fancy_mansion_furnitureset.png",
+        import.meta.url,
+      ).toString(),
+    );
+  }
 
   create() {
     // 배경
     this.cameras.main.setBackgroundColor("#1b1b1b");
+    updateBootStatus("create: starting");
 
-    // 바닥 타일 생성 및 배치
-    this.createFloor();
+    let usedFallback = false;
 
-    // 월드 바운더리 설정 (고정된 맵 크기)
-    this.physics.world.setBounds(0, 0, this.mapWidth, this.mapHeight);
-    this.cameras.main.setBounds(0, 0, this.mapWidth, this.mapHeight);
+    if (!this.cache.tilemap.exists(this.mapKey)) {
+      this.createFallbackWorld(`Map JSON not loaded (${this.mapUrl})`);
+      usedFallback = true;
+    } else {
+      try {
+        const map = this.make.tilemap({ key: this.mapKey });
+        if (map.width * map.height > this.maxTileCount) {
+          this.createFallbackWorld(
+            `Map too large (${map.width}x${map.height} tiles)`,
+          );
+          usedFallback = true;
+        } else {
+          const tilesetDoor = map.addTilesetImage(
+            "door-and-room",
+            "tiles-door-and-room",
+          );
+          if (!tilesetDoor) {
+            this.createFallbackWorld("Tileset image missing: door-and-room");
+            usedFallback = true;
+          } else {
+            const tilesets = [tilesetDoor];
+            const backgroundLayer = map.createLayer(
+              "background",
+              tilesets,
+              0,
+              0,
+            );
+            backgroundLayer?.setDepth(-10);
+
+            // 월드 바운더리 설정 (고정된 맵 크기)
+            this.mapWidth = map.widthInPixels;
+            this.mapHeight = map.heightInPixels;
+            this.physics.world.setBounds(0, 0, this.mapWidth, this.mapHeight);
+            this.cameras.main.setBounds(0, 0, this.mapWidth, this.mapHeight);
+          }
+        }
+      } catch (error) {
+        console.error("[map] create failed", error);
+        this.createFallbackWorld("Map parse/create failed");
+        usedFallback = true;
+      }
+    }
+
+    if (usedFallback) {
+      this.mapWidth = this.physics.world.bounds.width;
+      this.mapHeight = this.physics.world.bounds.height;
+    }
 
     // 화면 중앙에 플레이어(일단 사각형)
     const cx = this.mapWidth / 2;
     const cy = this.mapHeight / 2;
-
-    // 테스트용 오브젝트: 100x30 빨간 박스 (충돌 대상)
-    const obstacle = this.add
-      .rectangle(200, 160, 100, 30, 0xff3b3b)
-      .setOrigin(0.5, 0.5);
-    this.physics.add.existing(obstacle, true);
 
     this.player = this.add.rectangle(cx, cy, 20, 20, 0xffffff);
     this.player.setOrigin(0.5, 0.5);
@@ -54,19 +130,20 @@ class MainScene extends Phaser.Scene {
     this.playerBody.setAllowGravity(false);
     this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
 
-    this.physics.add.collider(this.player, obstacle);
-
     // 안내 텍스트(디버그)
     this.add
       .text(12, 12, "Move: joystick (mobile) / arrow keys (desktop)", {
         fontFamily: "monospace",
         fontSize: "14px",
       })
-      .setAlpha(0.85);
+      .setAlpha(0.85)
+      .setScrollFactor(0);
 
     this.setupJoystick();
     this.setupResizeHandling();
     this.setupSocket();
+
+    updateBootStatus(usedFallback ? "create: fallback world" : "create: map ok");
   }
 
   update() {
@@ -93,25 +170,6 @@ class MainScene extends Phaser.Scene {
     this.playerBody.setVelocity(dx * this.speed, dy * this.speed);
 
     this.sendMoveIfNeeded(this.time.now);
-  }
-
-  private createFloor() {
-    const tileKey = "floor-tile";
-    if (!this.textures.exists(tileKey)) {
-      const tile = this.floorTileSize;
-      const gfx = this.add.graphics();
-      gfx.fillStyle(0x2a2a2a, 1);
-      gfx.fillRect(0, 0, tile, tile);
-      gfx.lineStyle(1, 0x333333, 1);
-      gfx.strokeRect(0, 0, tile, tile);
-      gfx.generateTexture(tileKey, tile, tile);
-      gfx.destroy();
-    }
-
-    this.add
-      .tileSprite(0, 0, this.mapWidth, this.mapHeight, tileKey)
-      .setOrigin(0, 0)
-      .setDepth(-10);
   }
 
   private setupJoystick() {
@@ -152,11 +210,13 @@ class MainScene extends Phaser.Scene {
       console.warn(`[ws] VITE_WS_URL not set, using ${url}`);
     }
 
+    updateNetStatus(`ws: connecting (${url})`);
     const socket = new WebSocket(url);
     this.socket = socket;
 
     socket.addEventListener("open", () => {
       console.log("[ws] connected");
+      updateNetStatus("ws: connected");
       const join: ClientToServer = {
         type: "join",
         room: "lobby",
@@ -205,10 +265,12 @@ class MainScene extends Phaser.Scene {
 
     socket.addEventListener("close", () => {
       console.warn("[ws] disconnected");
+      updateNetStatus("ws: disconnected");
     });
 
     socket.addEventListener("error", () => {
       console.warn("[ws] connection error");
+      updateNetStatus("ws: error");
     });
   }
 
@@ -288,10 +350,78 @@ class MainScene extends Phaser.Scene {
       this.cameras.resize(width, height);
     });
   }
+
+  private createFallbackWorld(reason: string) {
+    const { width, height } = this.fallbackSize;
+    this.mapWidth = width;
+    this.mapHeight = height;
+    this.physics.world.setBounds(0, 0, width, height);
+    this.cameras.main.setBounds(0, 0, width, height);
+
+    const tileKey = "fallback-tile";
+    if (!this.textures.exists(tileKey)) {
+      const tile = 32;
+      const gfx = this.add.graphics();
+      gfx.fillStyle(0x2a2a2a, 1);
+      gfx.fillRect(0, 0, tile, tile);
+      gfx.lineStyle(1, 0x333333, 1);
+      gfx.strokeRect(0, 0, tile, tile);
+      gfx.generateTexture(tileKey, tile, tile);
+      gfx.destroy();
+    }
+
+    this.add
+      .tileSprite(0, 0, width, height, tileKey)
+      .setOrigin(0, 0)
+      .setDepth(-10);
+
+    this.add
+      .text(12, 36, `Map fallback: ${reason}`, {
+        fontFamily: "monospace",
+        fontSize: "12px",
+        color: "#ffb86b",
+      })
+      .setAlpha(0.9)
+      .setScrollFactor(0);
+  }
 }
 
 const appEl = document.querySelector<HTMLDivElement>("#app");
 if (!appEl) throw new Error("#app not found");
+
+const bootStatus = document.createElement("div");
+bootStatus.id = "boot-status";
+bootStatus.style.position = "fixed";
+bootStatus.style.left = "8px";
+bootStatus.style.top = "8px";
+bootStatus.style.zIndex = "20";
+bootStatus.style.padding = "6px 8px";
+bootStatus.style.background = "rgba(0, 0, 0, 0.6)";
+bootStatus.style.color = "#ffffff";
+bootStatus.style.fontFamily = "monospace";
+bootStatus.style.fontSize = "12px";
+bootStatus.textContent = "boot: init";
+appEl.appendChild(bootStatus);
+updateBootStatus = (text: string) => {
+  bootStatus.textContent = text;
+};
+
+const netStatus = document.createElement("div");
+netStatus.id = "net-status";
+netStatus.style.position = "fixed";
+netStatus.style.left = "8px";
+netStatus.style.top = "32px";
+netStatus.style.zIndex = "20";
+netStatus.style.padding = "6px 8px";
+netStatus.style.background = "rgba(0, 0, 0, 0.6)";
+netStatus.style.color = "#9be7ff";
+netStatus.style.fontFamily = "monospace";
+netStatus.style.fontSize = "12px";
+netStatus.textContent = "ws: idle";
+appEl.appendChild(netStatus);
+updateNetStatus = (text: string) => {
+  netStatus.textContent = text;
+};
 
 // Phaser 게임 시작
 new Phaser.Game({

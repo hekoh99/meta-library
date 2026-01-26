@@ -6,6 +6,10 @@
   "scripts": {
     "dev:front": "pnpm --filter front dev",
     "dev:back": "pnpm --filter back dev",
-    "dev": "pnpm -r --parallel --filter front --filter back dev"
+    "dev": "pnpm -r --parallel --filter front --filter back dev",
+    "tiled:resolve": "node tools/resolve-tiled.js front/assets/map/library-main.json front/assets/map/library-main.resolved.json"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.3.3"
   }
 }
