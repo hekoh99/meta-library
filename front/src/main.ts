@@ -9,17 +9,14 @@ import type {
 
 type Vec2 = { x: number; y: number };
 
-let updateBootStatus = (_text: string) => {};
-let updateNetStatus = (_text: string) => {};
-
 class MainScene extends Phaser.Scene {
-  private player!: Phaser.GameObjects.Rectangle;
+  private player!: Phaser.Physics.Arcade.Sprite;
   private playerBody!: Phaser.Physics.Arcade.Body;
   private joystickDir: Vec2 = { x: 0, y: 0 };
   private speed = 220; // px/sec
   private socket?: WebSocket;
   private selfId: string | null = null;
-  private peers = new Map<string, Phaser.GameObjects.Rectangle>();
+  private peers = new Map<string, Phaser.GameObjects.Sprite>();
   private lastSentAt = 0;
   private lastSentPos: Vec2 = { x: 0, y: 0 };
   private nickname = `guest-${Math.floor(Math.random() * 10000)}`;
@@ -32,16 +29,6 @@ class MainScene extends Phaser.Scene {
   private mapUrl = "";
 
   preload() {
-    updateBootStatus("preload: starting");
-    this.load.on(Phaser.Loader.Events.FILE_LOAD_ERROR, (file: any) => {
-      const key = file?.key ?? "unknown";
-      const url = file?.url ?? "unknown";
-      updateBootStatus(`load error: ${key} (${url})`);
-    });
-    this.load.on(Phaser.Loader.Events.COMPLETE, () => {
-      updateBootStatus("preload: complete");
-    });
-
     this.mapUrl = new URL(
       "../assets/map/library-main.resolved.json",
       import.meta.url,
@@ -66,20 +53,17 @@ class MainScene extends Phaser.Scene {
   create() {
     // 배경
     this.cameras.main.setBackgroundColor("#1b1b1b");
-    updateBootStatus("create: starting");
 
     let usedFallback = false;
 
     if (!this.cache.tilemap.exists(this.mapKey)) {
-      this.createFallbackWorld(`Map JSON not loaded (${this.mapUrl})`);
+      this.createFallbackWorld();
       usedFallback = true;
     } else {
       try {
         const map = this.make.tilemap({ key: this.mapKey });
         if (map.width * map.height > this.maxTileCount) {
-          this.createFallbackWorld(
-            `Map too large (${map.width}x${map.height} tiles)`,
-          );
+            this.createFallbackWorld();
           usedFallback = true;
         } else {
           const tilesetDoor = map.addTilesetImage(
@@ -87,7 +71,7 @@ class MainScene extends Phaser.Scene {
             "tiles-door-and-room",
           );
           if (!tilesetDoor) {
-            this.createFallbackWorld("Tileset image missing: door-and-room");
+            this.createFallbackWorld();
             usedFallback = true;
           } else {
             const tilesets = [tilesetDoor];
@@ -108,7 +92,7 @@ class MainScene extends Phaser.Scene {
         }
       } catch (error) {
         console.error("[map] create failed", error);
-        this.createFallbackWorld("Map parse/create failed");
+        this.createFallbackWorld();
         usedFallback = true;
       }
     }
@@ -122,9 +106,10 @@ class MainScene extends Phaser.Scene {
     const cx = this.mapWidth / 2;
     const cy = this.mapHeight / 2;
 
-    this.player = this.add.rectangle(cx, cy, 20, 20, 0xffffff);
+    this.ensurePlayerTexture();
+    this.player = this.physics.add.sprite(cx, cy, "player-box");
     this.player.setOrigin(0.5, 0.5);
-    this.physics.add.existing(this.player);
+    this.player.setTint(0xffffff);
     this.playerBody = this.player.body as Phaser.Physics.Arcade.Body;
     this.playerBody.setCollideWorldBounds(true);
     this.playerBody.setAllowGravity(false);
@@ -142,8 +127,6 @@ class MainScene extends Phaser.Scene {
     this.setupJoystick();
     this.setupResizeHandling();
     this.setupSocket();
-
-    updateBootStatus(usedFallback ? "create: fallback world" : "create: map ok");
   }
 
   update() {
@@ -206,17 +189,10 @@ class MainScene extends Phaser.Scene {
     const url =
       (import.meta.env.VITE_WS_URL as string | undefined) ??
       "ws://localhost:8080";
-    if (!import.meta.env.VITE_WS_URL) {
-      console.warn(`[ws] VITE_WS_URL not set, using ${url}`);
-    }
-
-    updateNetStatus(`ws: connecting (${url})`);
     const socket = new WebSocket(url);
     this.socket = socket;
 
     socket.addEventListener("open", () => {
-      console.log("[ws] connected");
-      updateNetStatus("ws: connected");
       const join: ClientToServer = {
         type: "join",
         room: "lobby",
@@ -238,7 +214,7 @@ class MainScene extends Phaser.Scene {
         this.selfId = msg.id;
         msg.users.forEach((user) => {
           if (user.id === this.selfId) {
-            this.player.setFillStyle(user.color);
+            this.player.setTint(user.color);
             return;
           }
           this.upsertPeer(user);
@@ -263,15 +239,6 @@ class MainScene extends Phaser.Scene {
       }
     });
 
-    socket.addEventListener("close", () => {
-      console.warn("[ws] disconnected");
-      updateNetStatus("ws: disconnected");
-    });
-
-    socket.addEventListener("error", () => {
-      console.warn("[ws] connection error");
-      updateNetStatus("ws: error");
-    });
   }
 
   private async parseServerMessage(
@@ -315,32 +282,45 @@ class MainScene extends Phaser.Scene {
   }
 
   private upsertPeer(user: UserState) {
-    let rect = this.peers.get(user.id);
-    if (!rect) {
-      rect = this.add.rectangle(user.x, user.y, 20, 20, user.color);
-      rect.setOrigin(0.5, 0.5);
-      this.peers.set(user.id, rect);
+    let sprite = this.peers.get(user.id);
+    if (!sprite) {
+      this.ensurePlayerTexture();
+      sprite = this.add.sprite(user.x, user.y, "player-box");
+      sprite.setOrigin(0.5, 0.5);
+      sprite.setTint(user.color);
+      this.peers.set(user.id, sprite);
       return;
     }
 
-    rect.setPosition(user.x, user.y);
+    sprite.setPosition(user.x, user.y);
   }
 
   private updatePeerPosition(id: string, x: number, y: number) {
-    const rect = this.peers.get(id);
-    if (!rect) {
+    const sprite = this.peers.get(id);
+    if (!sprite) {
       this.upsertPeer({ id, nickname: "", avatar: "", color: 0x66ccff, x, y });
       return;
     }
 
-    rect.setPosition(x, y);
+    sprite.setPosition(x, y);
   }
 
   private removePeer(id: string) {
-    const rect = this.peers.get(id);
-    if (!rect) return;
-    rect.destroy();
+    const sprite = this.peers.get(id);
+    if (!sprite) return;
+    sprite.destroy();
     this.peers.delete(id);
+  }
+
+  private ensurePlayerTexture() {
+    const key = "player-box";
+    if (this.textures.exists(key)) return;
+    const size = 20;
+    const gfx = this.add.graphics();
+    gfx.fillStyle(0xffffff, 1);
+    gfx.fillRect(0, 0, size, size);
+    gfx.generateTexture(key, size, size);
+    gfx.destroy();
   }
 
   private setupResizeHandling() {
@@ -351,7 +331,7 @@ class MainScene extends Phaser.Scene {
     });
   }
 
-  private createFallbackWorld(reason: string) {
+  private createFallbackWorld() {
     const { width, height } = this.fallbackSize;
     this.mapWidth = width;
     this.mapHeight = height;
@@ -375,53 +355,11 @@ class MainScene extends Phaser.Scene {
       .setOrigin(0, 0)
       .setDepth(-10);
 
-    this.add
-      .text(12, 36, `Map fallback: ${reason}`, {
-        fontFamily: "monospace",
-        fontSize: "12px",
-        color: "#ffb86b",
-      })
-      .setAlpha(0.9)
-      .setScrollFactor(0);
   }
 }
 
 const appEl = document.querySelector<HTMLDivElement>("#app");
 if (!appEl) throw new Error("#app not found");
-
-const bootStatus = document.createElement("div");
-bootStatus.id = "boot-status";
-bootStatus.style.position = "fixed";
-bootStatus.style.left = "8px";
-bootStatus.style.top = "8px";
-bootStatus.style.zIndex = "20";
-bootStatus.style.padding = "6px 8px";
-bootStatus.style.background = "rgba(0, 0, 0, 0.6)";
-bootStatus.style.color = "#ffffff";
-bootStatus.style.fontFamily = "monospace";
-bootStatus.style.fontSize = "12px";
-bootStatus.textContent = "boot: init";
-appEl.appendChild(bootStatus);
-updateBootStatus = (text: string) => {
-  bootStatus.textContent = text;
-};
-
-const netStatus = document.createElement("div");
-netStatus.id = "net-status";
-netStatus.style.position = "fixed";
-netStatus.style.left = "8px";
-netStatus.style.top = "32px";
-netStatus.style.zIndex = "20";
-netStatus.style.padding = "6px 8px";
-netStatus.style.background = "rgba(0, 0, 0, 0.6)";
-netStatus.style.color = "#9be7ff";
-netStatus.style.fontFamily = "monospace";
-netStatus.style.fontSize = "12px";
-netStatus.textContent = "ws: idle";
-appEl.appendChild(netStatus);
-updateNetStatus = (text: string) => {
-  netStatus.textContent = text;
-};
 
 // Phaser 게임 시작
 new Phaser.Game({
