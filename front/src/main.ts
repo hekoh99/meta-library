@@ -27,6 +27,7 @@ class MainScene extends Phaser.Scene {
   private readonly fallbackSize = { width: 2000, height: 1200 };
   private readonly maxTileCount = 250_000;
   private mapUrl = "";
+  private collisionLayer?: Phaser.Tilemaps.TilemapLayer;
 
   preload() {
     this.mapUrl = new URL(
@@ -83,11 +84,24 @@ class MainScene extends Phaser.Scene {
             );
             backgroundLayer?.setDepth(-10);
 
+            this.collisionLayer =
+              map.createLayer(
+              "collision",
+              tilesets,
+              0,
+              0,
+              ) ?? undefined;
+            if (this.collisionLayer) {
+              this.collisionLayer.setCollisionByExclusion([-1]);
+              this.collisionLayer.setVisible(false);
+            }
+
             // 월드 바운더리 설정 (고정된 맵 크기)
             this.mapWidth = map.widthInPixels;
             this.mapHeight = map.heightInPixels;
             this.physics.world.setBounds(0, 0, this.mapWidth, this.mapHeight);
             this.cameras.main.setBounds(0, 0, this.mapWidth, this.mapHeight);
+
           }
         }
       } catch (error) {
@@ -114,6 +128,9 @@ class MainScene extends Phaser.Scene {
     this.playerBody.setCollideWorldBounds(true);
     this.playerBody.setAllowGravity(false);
     this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
+    if (this.collisionLayer) {
+      this.physics.add.collider(this.player, this.collisionLayer);
+    }
 
     // 안내 텍스트(디버그)
     this.add
