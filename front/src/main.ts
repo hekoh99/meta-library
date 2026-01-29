@@ -45,6 +45,8 @@ class MainScene extends Phaser.Scene {
   private interactKey?: Phaser.Input.Keyboard.Key;
   private doorColliderGroup?: Phaser.Physics.Arcade.StaticGroup;
   private doorTileSize = { width: 32, height: 32 };
+  private pointerListenerAttached = false;
+  private lastDoorToggleAt = 0;
 
   preload() {
     this.mapUrl = new URL(
@@ -208,6 +210,7 @@ class MainScene extends Phaser.Scene {
     this.setupJoystick();
     this.setupResizeHandling();
     this.setupSocket();
+    this.setupPointerInteraction();
   }
 
   update() {
@@ -238,7 +241,7 @@ class MainScene extends Phaser.Scene {
     if (this.interactKey && Phaser.Input.Keyboard.JustDown(this.interactKey)) {
       const doorKey = this.findNearbyDoorKey();
       if (doorKey) {
-        this.requestDoorToggle(doorKey);
+        this.tryDoorToggle(doorKey);
       }
     }
   }
@@ -540,6 +543,13 @@ class MainScene extends Phaser.Scene {
     this.applyDoorState(collisionKey, nextState);
   }
 
+  private tryDoorToggle(collisionKey: string) {
+    const now = this.time?.now ?? performance.now();
+    if (now - this.lastDoorToggleAt < 250) return;
+    this.lastDoorToggleAt = now;
+    this.requestDoorToggle(collisionKey);
+  }
+
   private findNearbyDoorKey(): string | null {
     if (!this.map || this.doorTiles.length === 0) return null;
     const playerTileX = this.map.worldToTileX(this.player.x);
@@ -551,6 +561,17 @@ class MainScene extends Phaser.Scene {
       if (dx <= 1 && dy <= 1) return doorTile.collisionKey;
     }
     return null;
+  }
+
+  private findDoorKeyAtWorld(x: number, y: number): string | null {
+    if (!this.map || this.doorTiles.length === 0) return null;
+    const tileX = this.map.worldToTileX(x);
+    const tileY = this.map.worldToTileY(y);
+    if (tileX === null || tileY === null) return null;
+    const match = this.doorTiles.find(
+      (doorTile) => doorTile.tileX === tileX && doorTile.tileY === tileY,
+    );
+    return match?.collisionKey ?? null;
   }
 
   private getObjectProperties(obj: Phaser.Types.Tilemaps.TiledObject) {
@@ -578,6 +599,40 @@ class MainScene extends Phaser.Scene {
     gfx.fillRect(0, 0, 2, 2);
     gfx.generateTexture(key, 2, 2);
     gfx.destroy();
+  }
+
+  private setupPointerInteraction() {
+    if (this.pointerListenerAttached) return;
+    this.pointerListenerAttached = true;
+    this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      const doorKey = this.findDoorKeyAtWorld(pointer.worldX, pointer.worldY);
+      if (doorKey) {
+        this.tryDoorToggle(doorKey);
+      }
+    });
+
+    const canvas = this.game.canvas;
+    const onTouch = (event: TouchEvent) => {
+      const touch = event.changedTouches[0];
+      if (!touch) return;
+      const target = event.target as Node | null;
+      const zone = document.getElementById("joystick-zone");
+      if (zone && target && zone.contains(target)) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const localX = touch.clientX - rect.left;
+      const localY = touch.clientY - rect.top;
+      const worldPoint = this.cameras.main.getWorldPoint(localX, localY);
+      const doorKey = this.findDoorKeyAtWorld(worldPoint.x, worldPoint.y);
+      if (doorKey) {
+        this.tryDoorToggle(doorKey);
+      }
+    };
+
+    canvas.addEventListener("touchend", onTouch, { passive: true });
+    this.events.once("shutdown", () => {
+      canvas.removeEventListener("touchend", onTouch);
+    });
   }
 
   private setupResizeHandling() {
