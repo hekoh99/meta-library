@@ -9,6 +9,16 @@ import type {
 
 type Vec2 = { x: number; y: number };
 
+type DoorTile = {
+  collisionKey: string;
+  tileX: number;
+  tileY: number;
+  closedTileId: number;
+  openTileId: number;
+  isOpen: boolean;
+  collider?: Phaser.Physics.Arcade.Image;
+};
+
 class MainScene extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
   private playerBody!: Phaser.Physics.Arcade.Body;
@@ -28,6 +38,13 @@ class MainScene extends Phaser.Scene {
   private readonly maxTileCount = 250_000;
   private mapUrl = "";
   private collisionLayer?: Phaser.Tilemaps.TilemapLayer;
+  private map?: Phaser.Tilemaps.Tilemap;
+  private doorLayer?: Phaser.Tilemaps.TilemapLayer;
+  private doorTiles: DoorTile[] = [];
+  private doorGroups = new Map<string, DoorTile[]>();
+  private interactKey?: Phaser.Input.Keyboard.Key;
+  private doorColliderGroup?: Phaser.Physics.Arcade.StaticGroup;
+  private doorTileSize = { width: 32, height: 32 };
 
   preload() {
     this.mapUrl = new URL(
@@ -49,6 +66,17 @@ class MainScene extends Phaser.Scene {
         import.meta.url,
       ).toString(),
     );
+    this.load.image(
+      "tiles-furniture",
+      new URL(
+        "../assets/map/tilesets/InteriorTilesLITE.png",
+        import.meta.url,
+      ).toString(),
+    );
+    this.load.image(
+      "tiles-collisions",
+      new URL("../assets/map/tilesets/Bricks.png", import.meta.url).toString(),
+    );
   }
 
   create() {
@@ -63,6 +91,7 @@ class MainScene extends Phaser.Scene {
     } else {
       try {
         const map = this.make.tilemap({ key: this.mapKey });
+        this.map = map;
         if (map.width * map.height > this.maxTileCount) {
             this.createFallbackWorld();
           usedFallback = true;
@@ -71,11 +100,23 @@ class MainScene extends Phaser.Scene {
             "door-and-room",
             "tiles-door-and-room",
           );
-          if (!tilesetDoor) {
+          const tilesetFurniture = map.addTilesetImage(
+            "furniture",
+            "tiles-furniture",
+          );
+          const tilesetCollisions = map.addTilesetImage(
+            "collisions",
+            "tiles-collisions",
+          );
+          const tilesets = [
+            tilesetDoor,
+            tilesetFurniture,
+            tilesetCollisions,
+          ].filter(Boolean) as Phaser.Tilemaps.Tileset[];
+          if (!tilesetDoor || tilesets.length === 0) {
             this.createFallbackWorld();
             usedFallback = true;
           } else {
-            const tilesets = [tilesetDoor];
             const backgroundLayer = map.createLayer(
               "background",
               tilesets,
@@ -83,6 +124,22 @@ class MainScene extends Phaser.Scene {
               0,
             );
             backgroundLayer?.setDepth(-10);
+
+            const wallSideLayer = map.createLayer(
+              "wall-side",
+              tilesets,
+              0,
+              0,
+            );
+            wallSideLayer?.setDepth(1);
+
+            const wallTopLayer = map.createLayer(
+              "wall-top",
+              tilesets,
+              0,
+              0,
+            );
+            wallTopLayer?.setDepth(2);
 
             this.collisionLayer =
               map.createLayer(
@@ -95,6 +152,7 @@ class MainScene extends Phaser.Scene {
               this.collisionLayer.setCollisionByExclusion([-1]);
               this.collisionLayer.setVisible(false);
             }
+            this.setupDoors(map, tilesets);
 
             // 월드 바운더리 설정 (고정된 맵 크기)
             this.mapWidth = map.widthInPixels;
@@ -131,6 +189,12 @@ class MainScene extends Phaser.Scene {
     if (this.collisionLayer) {
       this.physics.add.collider(this.player, this.collisionLayer);
     }
+    if (this.doorColliderGroup) {
+      this.physics.add.collider(this.player, this.doorColliderGroup);
+    }
+    this.interactKey = this.input.keyboard?.addKey(
+      Phaser.Input.Keyboard.KeyCodes.E,
+    );
 
     // 안내 텍스트(디버그)
     this.add
@@ -170,6 +234,13 @@ class MainScene extends Phaser.Scene {
     this.playerBody.setVelocity(dx * this.speed, dy * this.speed);
 
     this.sendMoveIfNeeded(this.time.now);
+
+    if (this.interactKey && Phaser.Input.Keyboard.JustDown(this.interactKey)) {
+      const doorKey = this.findNearbyDoorKey();
+      if (doorKey) {
+        this.requestDoorToggle(doorKey);
+      }
+    }
   }
 
   private setupJoystick() {
@@ -236,6 +307,9 @@ class MainScene extends Phaser.Scene {
           }
           this.upsertPeer(user);
         });
+        msg.doors.forEach((door) => {
+          this.applyDoorState(door.key, door.isOpen);
+        });
         return;
       }
 
@@ -253,6 +327,10 @@ class MainScene extends Phaser.Scene {
       if (msg.type === "state") {
         if (msg.id === this.selfId) return;
         this.updatePeerPosition(msg.id, msg.x, msg.y);
+      }
+
+      if (msg.type === "door_state") {
+        this.applyDoorState(msg.key, msg.isOpen);
       }
     });
 
@@ -337,6 +415,168 @@ class MainScene extends Phaser.Scene {
     gfx.fillStyle(0xffffff, 1);
     gfx.fillRect(0, 0, size, size);
     gfx.generateTexture(key, size, size);
+    gfx.destroy();
+  }
+
+  private setupDoors(
+    map: Phaser.Tilemaps.Tilemap,
+    tilesets: Phaser.Tilemaps.Tileset[],
+  ) {
+    const doorsLayer = map.getObjectLayer("doors");
+    if (!doorsLayer) return;
+
+    const doorTileset =
+      tilesets.find((tileset) => tileset.name === "door-and-room") ?? null;
+    const doorFirstGid = doorTileset?.firstgid ?? 1;
+
+    this.doorTileSize = { width: map.tileWidth, height: map.tileHeight };
+    this.doorColliderGroup = this.physics.add.staticGroup();
+
+    this.doorLayer =
+      map.createBlankLayer("doors-runtime", tilesets, 0, 0) ?? undefined;
+    if (this.doorLayer) {
+      this.doorLayer.setDepth(3);
+    }
+
+    const tileWidth = map.tileWidth;
+    const tileHeight = map.tileHeight;
+
+    doorsLayer.objects.forEach((obj) => {
+      if (!obj.gid) return;
+      const properties = this.getObjectProperties(obj);
+      const collisionKey = properties.collisionKey;
+      const closedTileId = this.parseTileId(properties.closedTileId);
+      const openTileId = this.parseTileId(properties.openTileId);
+      const status = properties.status ?? "closed";
+
+      if (!collisionKey || closedTileId === null || openTileId === null) return;
+
+      const objX = obj.x ?? 0;
+      const objY = obj.y ?? 0;
+      const tileX = Math.floor(objX / tileWidth);
+      const tileY = Math.floor((objY - tileHeight) / tileHeight + 0.01);
+      const isOpen = status === "open";
+
+      const doorTile: DoorTile = {
+        collisionKey,
+        tileX,
+        tileY,
+        closedTileId: doorFirstGid + closedTileId,
+        openTileId: doorFirstGid + openTileId,
+        isOpen,
+      };
+
+      this.doorTiles.push(doorTile);
+      const group = this.doorGroups.get(collisionKey) ?? [];
+      group.push(doorTile);
+      this.doorGroups.set(collisionKey, group);
+
+      if (this.collisionLayer) {
+        const tile = this.collisionLayer.getTileAt(doorTile.tileX, doorTile.tileY);
+        if (tile) {
+          this.collisionLayer.removeTileAt(doorTile.tileX, doorTile.tileY);
+        }
+      }
+
+      this.renderDoorTile(doorTile);
+    });
+  }
+
+  private renderDoorTile(doorTile: DoorTile) {
+    const tileId = doorTile.isOpen ? doorTile.openTileId : doorTile.closedTileId;
+    if (this.doorLayer) {
+      this.doorLayer.putTileAt(tileId, doorTile.tileX, doorTile.tileY);
+    }
+    if (doorTile.isOpen) {
+      if (doorTile.collider) {
+        doorTile.collider.destroy();
+        doorTile.collider = undefined;
+      }
+      return;
+    }
+
+    if (!this.doorColliderGroup) return;
+
+    if (!doorTile.collider) {
+      this.ensureDoorColliderTexture();
+      const centerX =
+        doorTile.tileX * this.doorTileSize.width +
+        this.doorTileSize.width / 2;
+      const centerY =
+        doorTile.tileY * this.doorTileSize.height +
+        this.doorTileSize.height / 2;
+      doorTile.collider = this.doorColliderGroup.create(
+        centerX,
+        centerY,
+        "door-collider",
+      ) as Phaser.Physics.Arcade.Image;
+      doorTile.collider.setDisplaySize(
+        this.doorTileSize.width,
+        this.doorTileSize.height,
+      );
+      doorTile.collider.setVisible(false);
+      doorTile.collider.refreshBody();
+    }
+  }
+
+  private applyDoorState(collisionKey: string, isOpen: boolean) {
+    const group = this.doorGroups.get(collisionKey);
+    if (!group) return;
+    group.forEach((doorTile) => {
+      doorTile.isOpen = isOpen;
+      this.renderDoorTile(doorTile);
+    });
+  }
+
+  private requestDoorToggle(collisionKey: string) {
+    const group = this.doorGroups.get(collisionKey);
+    if (!group || group.length === 0) return;
+    const nextState = !group[0].isOpen;
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      const payload: ClientToServer = { type: "door_toggle", key: collisionKey };
+      this.socket.send(JSON.stringify(payload));
+      return;
+    }
+    this.applyDoorState(collisionKey, nextState);
+  }
+
+  private findNearbyDoorKey(): string | null {
+    if (!this.map || this.doorTiles.length === 0) return null;
+    const playerTileX = this.map.worldToTileX(this.player.x);
+    const playerTileY = this.map.worldToTileY(this.player.y);
+    if (playerTileX === null || playerTileY === null) return null;
+    for (const doorTile of this.doorTiles) {
+      const dx = Math.abs(doorTile.tileX - playerTileX);
+      const dy = Math.abs(doorTile.tileY - playerTileY);
+      if (dx <= 1 && dy <= 1) return doorTile.collisionKey;
+    }
+    return null;
+  }
+
+  private getObjectProperties(obj: Phaser.Types.Tilemaps.TiledObject) {
+    const props: Record<string, string> = {};
+    if (!obj.properties) return props;
+    obj.properties.forEach((prop: { name?: string; value?: unknown }) => {
+      if (prop?.name) {
+        props[prop.name] = String(prop.value ?? "");
+      }
+    });
+    return props;
+  }
+
+  private parseTileId(value: string | undefined) {
+    if (!value) return null;
+    const num = Number(value);
+    return Number.isNaN(num) ? null : num;
+  }
+
+  private ensureDoorColliderTexture() {
+    const key = "door-collider";
+    if (this.textures.exists(key)) return;
+    const gfx = this.add.graphics();
+    gfx.fillStyle(0xffffff, 1);
+    gfx.fillRect(0, 0, 2, 2);
+    gfx.generateTexture(key, 2, 2);
     gfx.destroy();
   }
 

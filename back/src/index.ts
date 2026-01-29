@@ -1,10 +1,6 @@
 import { nanoid } from "nanoid";
 import WebSocket, { WebSocketServer } from "ws";
-import type {
-  ClientToServer,
-  ServerToClient,
-  UserState,
-} from "shared/src/messages";
+import type { ClientToServer, ServerToClient, UserState } from "shared/src/messages";
 
 const host = process.env.BACK_HOST || "0.0.0.0";
 const port = Number(process.env.BACK_PORT) || 8080;
@@ -12,6 +8,7 @@ const wss = new WebSocketServer({ host, port });
 
 const usersBySocket = new Map<WebSocket, UserState>();
 const socketsById = new Map<string, WebSocket>();
+const doorStates = new Map<string, boolean>();
 
 const clientCount = () => wss.clients.size;
 const palette = [
@@ -84,6 +81,10 @@ wss.on("connection", (socket) => {
         type: "welcome",
         id: user.id,
         users: Array.from(usersBySocket.values()),
+        doors: Array.from(doorStates.entries()).map(([key, isOpen]) => ({
+          key,
+          isOpen,
+        })),
       });
 
       broadcast({ type: "user_joined", user }, socket);
@@ -96,6 +97,18 @@ wss.on("connection", (socket) => {
       user.x = msg.x;
       user.y = msg.y;
       broadcast({ type: "state", id: user.id, x: user.x, y: user.y }, socket);
+      return;
+    }
+
+    if (msg.type === "door_toggle") {
+      const nextState = !(doorStates.get(msg.key) ?? false);
+      doorStates.set(msg.key, nextState);
+      const payload: ServerToClient = {
+        type: "door_state",
+        key: msg.key,
+        isOpen: nextState,
+      };
+      broadcast(payload);
       return;
     }
   });
