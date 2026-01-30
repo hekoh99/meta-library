@@ -33,6 +33,7 @@ class MainScene extends Phaser.Scene {
   private readonly maxTileCount = 250_000;
   private mapUrl = "";
   private collisionLayer?: Phaser.Tilemaps.TilemapLayer;
+  private thinWallColliders?: Phaser.Physics.Arcade.StaticGroup;
   private doorSystem?: DoorSystem;
   private interactKey?: Phaser.Input.Keyboard.Key;
   private interactionRegistry?: InteractionRegistry;
@@ -111,6 +112,9 @@ class MainScene extends Phaser.Scene {
       this.interactionRange =
         Math.max(world.map.tileWidth, world.map.tileHeight) * 1.5;
     }
+    this.thinWallColliders = this.createObjectColliders(
+      world.objectLayers.thinWall,
+    );
 
     // 화면 중앙에 플레이어(일단 사각형)
     const cx = this.mapWidth / 2;
@@ -130,6 +134,9 @@ class MainScene extends Phaser.Scene {
     }
     if (this.doorSystem?.collisionLayer) {
       this.physics.add.collider(this.player, this.doorSystem.collisionLayer);
+    }
+    if (this.thinWallColliders) {
+      this.physics.add.collider(this.player, this.thinWallColliders);
     }
     this.interactKey = this.input.keyboard?.addKey(
       Phaser.Input.Keyboard.KeyCodes.E,
@@ -226,6 +233,39 @@ class MainScene extends Phaser.Scene {
         zone.parentElement.removeChild(zone);
       }
     });
+  }
+
+  private createObjectColliders(
+    objectLayer?: Phaser.Tilemaps.ObjectLayer,
+  ): Phaser.Physics.Arcade.StaticGroup | undefined {
+    if (!objectLayer || objectLayer.objects.length === 0) return undefined;
+
+    const group = this.physics.add.staticGroup();
+    objectLayer.objects.forEach((obj) => {
+      if (obj.visible === false) return;
+      const width = obj.width ?? 0;
+      const height = obj.height ?? 0;
+      if (width <= 0 || height <= 0) return;
+
+      const rect = this.add.rectangle(
+        obj.x ?? 0,
+        obj.y ?? 0,
+        width,
+        height,
+        0xff0000,
+        0,
+      );
+      rect.setOrigin(0, 0);
+      rect.setVisible(false);
+      this.physics.add.existing(rect, true);
+      const body = rect.body as Phaser.Physics.Arcade.StaticBody;
+      body.setSize(width, height);
+      body.setOffset(0, 0);
+      body.updateFromGameObject();
+      group.add(rect);
+    });
+
+    return group.getLength() > 0 ? group : undefined;
   }
 
   private setupNetwork() {

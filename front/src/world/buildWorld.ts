@@ -11,6 +11,7 @@ type WorldLayers = {
 type WorldObjectLayers = {
   doors?: Phaser.Tilemaps.ObjectLayer;
   interactions?: Phaser.Tilemaps.ObjectLayer;
+  thinWall?: Phaser.Tilemaps.ObjectLayer;
 };
 
 export type BuildWorldResult = {
@@ -81,6 +82,7 @@ export function buildWorld(
     const objectLayers: WorldObjectLayers = {
       doors: map.getObjectLayer("doors") ?? undefined,
       interactions: map.getObjectLayer("interactions") ?? undefined,
+      thinWall: map.getObjectLayer("thin-wall") ?? undefined,
     };
 
     return {
